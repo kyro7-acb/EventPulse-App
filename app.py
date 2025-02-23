@@ -7,6 +7,7 @@ from marshmallow_sqlalchemy import SQLAlchemySchema, auto_field
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from dotenv import load_dotenv
 import os
+from functools import wraps
 
 load_dotenv()
 
@@ -26,11 +27,17 @@ jwt = JWTManager(app)
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
+class Role:
+    ADMIN = "admin"
+    CUSTOMER = "customer"
+    SERVICE_PROVIDER = "service_provider"
+
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password = db.Column(db.String(128), nullable=False)
+    role = db.Column(db.String(20), nullable=False, default=Role.CUSTOMER)
 
 # Define the User schema
 class UserSchema(SQLAlchemySchema):
@@ -42,10 +49,25 @@ class UserSchema(SQLAlchemySchema):
     id = auto_field()
     username = auto_field()
     email = auto_field()
-
+    role = auto_field()
+    
 # Create instances of the schema
 user_schema = UserSchema()
 users_schema = UserSchema(many=True)
+
+def role_required(required_role):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            username = get_jwt_identity()
+            user = User.query.filter_by(username=username).first()
+
+            if user is not None and user.role != required_role:
+                return jsonify({"error": "Unauthorized"}), 403
+            
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 @app.route('/')
 def home():
@@ -56,7 +78,7 @@ def create_user():
     data = request.json
 
     # Check for missing fields
-    required_fields = {"username", "email", "password"}
+    required_fields = {"username", "email", "password", "role"}
     if required_fields - data.keys():
         return jsonify({"error": "Missing fields"}), 400
 
@@ -73,14 +95,18 @@ def create_user():
 
     # Hash the password before storing it
     hashed_password = generate_password_hash(password)
+    
+    role = data.get("role", "customer").lower()  # Default to "customer"
+    if role not in ["customer", "service_provider"]:
+        return jsonify({"error": "Invalid role"}), 400
 
     # Check if the username or email already exists
     if User.query.filter((User.username == data["username"]) | (User.email == data["email"])).first():
         return jsonify({"error": "Registration failed"}), 400  # Generic error message
-
+  
     # Create and save the new user
     try:
-        new_user = User(username=data["username"], email=data["email"], password=hashed_password)
+        new_user = User(username=data["username"], email=data["email"], password=hashed_password, role=data["role"])
         db.session.add(new_user)
         db.session.commit()
     except Exception:
@@ -91,13 +117,11 @@ def create_user():
 
 @app.route('/users', methods=['GET'])
 @jwt_required()
+@role_required("admin")
 def get_users():
-      users = User.query.all()
-      return jsonify(users_schema.dump(users)), 200
+    users = User.query.all()
+    return jsonify(users_schema.dump(users)), 200
     
-
-
-
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
@@ -112,9 +136,26 @@ def login():
         return jsonify({"error": "Invalid email or password"}), 401
 
     # Generate JWT token
-    access_token = create_access_token(identity=user.username)
+    access_token = create_access_token(identity=user.role)
     return jsonify({"access_token": access_token}), 200
 
+@app.route('/admin/dashboard', methods=['GET'])
+@jwt_required()
+@role_required("admin")
+def admin_dashboard():
+    return jsonify({"message": "Welcome, Admin!"})
+
+@app.route('/provider/dashboard', methods=['GET'])
+@jwt_required()
+@role_required("service_provider")
+def provider_dashboard():
+    return jsonify({"message": "Welcome, Service Provider!"})
+
+@app.route('/customer/dashboard', methods=['GET'])
+@jwt_required()
+@role_required("customer")
+def customer_dashboard():
+    return jsonify({"message": "Welcome, Customer!"})
 
 
 if __name__ == "__main__":
