@@ -15,7 +15,8 @@ class User(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password = db.Column(db.String(128), nullable=False)
     role = db.Column(db.String(20), nullable=False, default=Role.CUSTOMER)
-    
+    __tablename__ = "user"
+
 # Define the User schema
 class UserSchema(SQLAlchemySchema):
     class Meta:
@@ -45,3 +46,15 @@ class Event(db.Model):
     customer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
 
     customer = db.relationship('User', backref=db.backref('events', lazy=True))
+    __tablename__ = "event"
+
+class Service(db.Model):
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text)
+    category = db.Column(db.String(50), nullable=True)
+    price = db.Column(db.Float, nullable=True)
+    provider_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete="CASCADE"), nullable=False)
+
+    provider = db.relationship('User', backref=db.backref('services', lazy=True))
+    __tablename__ = "service"

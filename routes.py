@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token
-from models import User, Event, db, users_schema, user_schema
+from models import User, Event, db, users_schema, user_schema, Service
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from datetime import datetime
@@ -10,6 +10,7 @@ from functools import wraps
 
 routes = Blueprint('routes', __name__)
 
+# To check specific roles for particular api
 def role_required(required_role):
     def decorator(func):
         @wraps(func)
@@ -177,22 +178,22 @@ def event():
 @jwt_required()
 @role_required("customer")
 def edit_event(id):
-    data=request.json
-    # event= Event.query.filter_by(id=id).first  (will come in need when frontend implementation starts)
+    current_user= get_jwt_identity()
+    event= Event.query.filter_by(id=id).first()
+    if not event:
+        return jsonify({"error": "Event not found or unauthorized"}), 404
     
+    data = request.json
     try:
-        event = Event(
-            name=data["name"],
-            description=data.get("description"),
-            date_time=datetime.strptime(data["date_time"], "%Y-%m-%d %H:%M:%S"),
-            location=data["location"],
-            category=data["category"],
-            budget=data.get("budget"),
-            additional_requests=data.get("additional_requests"),
-            customer_id= id
-        )
+        event.name = data.get("name", event.name)
+        event.description = data.get("description", event.description)
+        event.date_time = datetime.strptime(data["date_time"], "%Y-%m-%d %H:%M:%S") if "date_time" in data else event.date_time
+        event.location = data.get("location", event.location)
+        event.category = data.get("category", event.category)
+        event.budget = data.get("budget", event.budget)
+        event.additional_requests = data.get("additional_requests", event.additional_requests)
+
         db.session.commit()
-        
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": "Failed to update event", "details": str(e)}), 500
@@ -204,16 +205,19 @@ def edit_event(id):
             "location": event.location,
             "category": event.category,
             "budget": event.budget,
-            "additional_requests": event.additional_requests,
-            "customer_id": event.customer_id
+            "additional_requests": event.additional_requests
         }}), 201
     
 @routes.route("/events/delete/<int:id>", methods= ['POST'])
 @jwt_required()
 @role_required("customer")
 def delete_event(id):
-    event= Event.query.filter_by(id=id).first()
-    print(event)
+    current_user = get_jwt_identity()
+    event = Event.query.filter_by(id=id, customer_id=current_user).first()
+
+    if not event:
+        return jsonify({"error": "Event not found or unauthorized"}), 404
+    
     try:
         db.session.delete(event)
         db.session.commit()
@@ -223,7 +227,54 @@ def delete_event(id):
 
     return jsonify({"message": "Deleted event successfully"}), 201
 
+@routes.route('/services', methods=['POST'])
+@jwt_required()
+@role_required("service_provider")  # Only service providers can add
+def add_service():
+    data = request.json
     
+    current_user = get_jwt_identity()
+    user = User.query.filter_by(username=current_user).first()
+
+    required_fields = {"name"}
+    if required_fields - data.keys():
+        return jsonify({"error": "Missing required fields"}), 400
+
+      
+    new_service = Service(
+        name=data["name"],
+        description=data.get("description"),
+        category=data.get("category"),  
+        price=float(data["price"]) if "price" in data else None,  
+        provider_id=user.id)
+
+    try:
+        db.session.add(new_service)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": "Failed to add service", "details": str(e)}), 500
+
+    return jsonify({"message": "Service added successfully!", "service_pname": new_service.provider.username}), 201
+
+
+@routes.route('/services', methods=['GET'])
+@jwt_required()  # Any logged-in user can browse services
+def list_services():
+    services = Service.query.join(User, Service.provider_id == User.id).all()
+
+    services_list = [{
+        "id": service.id,
+        "name": service.name,
+        "description": service.description,
+        "category": service.category,
+        "price": service.price,
+        "provider_name": service.provider.username  
+    } for service in services]
+
+    return jsonify(services_list), 200
+
+
 '''DASHBOARDS'''
 
 
